@@ -1,0 +1,12 @@
+{
+  "name": "출퇴근 기록 키오스크",
+  "short_name": "출퇴근키오스크",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#EEF0F3",
+  "theme_color": "#1C2331",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
