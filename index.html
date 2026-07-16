@@ -1201,7 +1201,7 @@
         <div style="font-size:11px;color:var(--muted);margin-top:8px;line-height:1.6;">
           <b>정규직</b>: 첫 해엔 만근 기준 월 1일씩(최대 11일) 월차가 쌓이고, 만 1년이 지나면 그 월차와 별도로 연차 15일이 새로 생겨요(3년차부터 2년마다 1일 가산, 최대 25일). 1년~3년차 사이엔 26일로 고정 표시돼요.<br/>
           <b>계약직 · 파트타이머</b>(주 15시간 이상 근무): 입사일 기준 매달 1일씩 상한 없이 쌓여요.<br/>
-          만근 여부는 앱이 자동으로 판단할 수 없어서(스케줄 정보가 없음), "내역" 버튼 → 구분을 "조정(가감)"으로 선택해서 관리자가 직접 -1일처럼 사유와 함께 차감할 수 있어요. "사용"은 실제 휴가 사용 차감용이에요. 같은 부서 연월차 승인 권한자는 자기 부서 기록을, 회사 전체 편집 권한자와 대표님은 모든 부서 기록을 관리할 수 있어요.
+          만근 여부는 앱이 자동으로 판단할 수 없어서(스케줄 정보가 없음), "내역" 버튼 → 구분을 "가감"으로 선택해서 관리자가 직접 -1일처럼 사유와 함께 조정할 수 있어요. "사용"은 날짜가 있는 실제 휴가, "누적 사용"은 과거 사용분을 날짜 없이 한 번에 차감할 때 사용해요. 누적 사용은 출근기록부 엑셀에 표시되지 않아요. 기존 가감 기록은 “내역”에서 일수·사유는 그대로 두고 카테고리만 누적 사용 또는 사용으로 바꿀 수 있어요. 같은 부서 연월차 승인 권한자는 자기 부서 기록을, 회사 전체 편집 권한자와 대표님은 모든 부서 기록을 관리할 수 있어요.
         </div>
       </div>
       <div class="panel" style="margin-top:16px;">
@@ -1383,7 +1383,8 @@
     <div style="text-align:left;">
       <select id="leaveEntryKind" class="leave-input" style="width:100%;margin-bottom:6px;">
         <option value="use">사용</option>
-        <option value="adjust">조정(가감)</option>
+        <option value="accumulated">누적 사용</option>
+        <option value="adjust">가감</option>
       </select>
 
       <div id="leaveDateRangeRow" style="display:flex;gap:6px;align-items:center;margin-bottom:6px;">
@@ -1408,7 +1409,7 @@
         <input type="number" id="leaveEntryAdjustAmount" class="leave-input hidden" step="0.5" placeholder="예: -1" style="flex:1;">
       </div>
 
-      <textarea id="leaveEntryReason" placeholder="사유 입력 (예: 개인 사정 / 6월 결근 3회로 만근 미달)" style="width:100%;box-sizing:border-box;padding:8px;border:1px solid var(--line);border-radius:8px;font-family:inherit;font-size:13px;min-height:56px;resize:vertical;"></textarea>
+      <textarea id="leaveEntryReason" placeholder="사유 입력 (예: 개인 사정 / 과거 사용분 누적 / 6월 결근 3회)" style="width:100%;box-sizing:border-box;padding:8px;border:1px solid var(--line);border-radius:8px;font-family:inherit;font-size:13px;min-height:56px;resize:vertical;"></textarea>
 
       <div style="margin-top:8px;">
         <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px;">진료확인서 등 사진 첨부 (선택)</label>
@@ -1990,7 +1991,8 @@ function adminScopeDept(){
   return employees.find(e=>e.name===name)?.dept || '기타';
 }
 
-// 직원정보 추가·수정·삭제 범위는 회사 전체 업무권한과 분리합니다.
+// 이름·부서·고용형태·직위·삭제는 기존 직원관리 범위를 유지합니다.
+// 회사 전체 업무권한자는 별도 함수에서 생년월일·입사일만 전사 범위로 편집할 수 있습니다.
 function employeeProfileScopeDept(){
   const name = activeAdminName();
   if(!name) return null;
@@ -2013,11 +2015,11 @@ function canViewAdminWorkEmployee(name){
   return deptOf(name) === scopeDept;
 }
 
-// 직원관리 화면: 회사 전체 권한부여 담당자는 다른 부서 직원도 권한 설정을 위해 볼 수 있습니다.
+// 직원관리 화면: 회사 전체 업무권한자와 회사 전체 권한부여 담당자는 전 직원을 볼 수 있습니다.
 function visibleEmployeesForEmployeeAdmin(){
   const name = activeAdminName();
   if(!name) return [];
-  if(name === OWNER_NAME || permissionGrantScopeFor(name)==='company') return employees.slice();
+  if(name === OWNER_NAME || hasCompanyWorkPermission(name) || permissionGrantScopeFor(name)==='company') return employees.slice();
   const dept = employees.find(e=>e.name===name)?.dept || '기타';
   return employees.filter(e=>(e.dept||'기타')===dept);
 }
@@ -2027,6 +2029,14 @@ function canAccessAdminEmployee(name){
   if(scopeDept === null) return false;
   if(scopeDept === '') return true;
   return deptOf(name) === scopeDept;
+}
+
+// 회사 전체 출퇴근·연월차 편집 권한자는 다른 부서 직원의 생년월일·입사일도 편집할 수 있습니다.
+// 이름·부서·고용형태·직위 변경과 삭제 권한은 기존 범위를 그대로 유지합니다.
+function canEditEmployeePersonalInfo(name){
+  const adminName = activeAdminName();
+  if(!adminName || !employees.some(e=>e.name===name)) return false;
+  return canAccessAdminEmployee(name) || hasCompanyWorkPermission(adminName);
 }
 
 function adminDeptOptionsHtml(selected){
@@ -2918,15 +2928,17 @@ function renderEmpList(){
 
   empListEl.innerHTML = filtered.map(e=>{
     const canEditProfile = canAccessAdminEmployee(e.name);
+    const canEditPersonalInfo = canEditEmployeePersonalInfo(e.name);
     const canGrantBasicPermissions = canGrantPermissionsFor(e.name);
     const canGrantCompanyPermission = canGrantCompanyPermissionFor(e.name);
     const canSetGrantScope = canSetPermissionGrantScope();
-    const canOpenEditor = canEditProfile || canGrantBasicPermissions || canGrantCompanyPermission || canSetGrantScope;
+    const canOpenEditor = canEditProfile || canEditPersonalInfo || canGrantBasicPermissions || canGrantCompanyPermission || canSetGrantScope;
     const profileDisabled = canEditProfile ? '' : 'disabled aria-disabled="true"';
-    const dobLabel = canEditProfile ? (e.dob || '미설정') : '비공개';
-    const hireDateLabel = canEditProfile ? (e.hireDate || '미등록') : '비공개';
-    const dobStyle = e.dob ? '' : 'color:var(--out-clay);font-weight:700;';
-    const hireDateStyle = e.hireDate ? '' : 'color:var(--out-clay);font-weight:700;';
+    const personalInfoDisabled = canEditPersonalInfo ? '' : 'disabled aria-disabled="true"';
+    const dobLabel = canEditPersonalInfo ? (e.dob || '미설정') : '비공개';
+    const hireDateLabel = canEditPersonalInfo ? (e.hireDate || '미등록') : '비공개';
+    const dobStyle = canEditPersonalInfo && !e.dob ? 'color:var(--out-clay);font-weight:700;' : '';
+    const hireDateStyle = canEditPersonalInfo && !e.hireDate ? 'color:var(--out-clay);font-weight:700;' : '';
     return `
     <li data-original-name="${escapeHtml(e.name)}">
       <div class="emp-view">
@@ -2957,7 +2969,7 @@ function renderEmpList(){
         </div>
       </div>
       <div class="emp-edit hidden">
-        ${!canEditProfile ? `<div style="font-size:11px;color:var(--out-clay);font-weight:700;margin-bottom:8px;">다른 부서 직원입니다. 개인정보는 변경할 수 없고 권한만 설정할 수 있어요.</div>` : ''}
+        ${!canEditProfile ? `<div style="font-size:11px;color:var(--out-clay);font-weight:700;margin-bottom:8px;">${canEditPersonalInfo ? '다른 부서 직원입니다. 생년월일과 입사일만 수정할 수 있어요.' : '다른 부서 직원입니다. 개인정보는 변경할 수 없고 권한만 설정할 수 있어요.'}</div>` : ''}
         <label class="emp-field-label">이름</label>
         <input class="name-edit-input" value="${escapeHtml(e.name)}" placeholder="이름" ${profileDisabled} />
         <div class="emp-row-bottom">
@@ -2975,9 +2987,9 @@ function renderEmpList(){
           </div>
         </div>
         <label class="emp-field-label">생년월일 (6자리)</label>
-        <input class="dob-edit-input num" type="tel" inputmode="numeric" maxlength="6" placeholder="${canEditProfile?'예: 990101':'비공개'}" value="${canEditProfile?escapeHtml(e.dob||''):''}" ${profileDisabled} />
+        <input class="dob-edit-input num" type="tel" inputmode="numeric" maxlength="6" placeholder="${canEditPersonalInfo?'예: 990101':'비공개'}" value="${canEditPersonalInfo?escapeHtml(e.dob||''):''}" ${personalInfoDisabled} />
         <label class="emp-field-label">입사일</label>
-        <input class="hire-date-edit-input num" type="date" value="${canEditProfile?escapeHtml(e.hireDate||''):''}" ${profileDisabled} />
+        <input class="hire-date-edit-input num" type="date" value="${canEditPersonalInfo?escapeHtml(e.hireDate||''):''}" ${personalInfoDisabled} />
         ${(canGrantBasicPermissions || canGrantCompanyPermission || canSetGrantScope) ? `
         <div style="margin-top:12px;padding:11px;border:1px solid var(--line);border-radius:10px;background:rgba(255,255,255,.45);">
           <label class="emp-field-label" style="margin-top:0;font-size:13px;">권한 부여</label>
@@ -2999,7 +3011,7 @@ function renderEmpList(){
           ${canGrantCompanyPermission ? `
           <label style="display:flex;align-items:flex-start;gap:7px;font-size:12px;color:var(--ink-soft);margin-top:8px;line-height:1.4;">
             <input type="checkbox" class="can-manage-company-checkbox" ${e.canManageCompany ? 'checked' : ''} style="width:16px;height:16px;margin-top:1px;">
-            <span><b>(회사 전체) 출퇴근·연월차 편집</b><br><span style="font-size:10px;color:var(--muted);">모든 부서의 출퇴근 편집과 연월차 승인·관리를 할 수 있음</span></span>
+            <span><b>(회사 전체) 출퇴근·연월차 편집</b><br><span style="font-size:10px;color:var(--muted);">모든 부서의 출퇴근·연월차 관리와 생년월일·입사일 편집 가능</span></span>
           </label>` : ''}
           ${canSetGrantScope ? `
           <label class="emp-field-label" style="margin-top:12px;">권한 부여 가능 범위 (대표님만 지정)</label>
@@ -3077,10 +3089,11 @@ function renderEmpList(){
       const newHireDate = li.querySelector('.hire-date-edit-input').value;
 
       const mayEditProfile = canAccessAdminEmployee(originalName);
+      const mayEditPersonalInfo = canEditEmployeePersonalInfo(originalName);
       const mayGrantBasicPermissions = canGrantPermissionsFor(originalName);
       const mayGrantCompanyPermission = canGrantCompanyPermissionFor(originalName);
       const maySetGrantScope = canSetPermissionGrantScope();
-      if(!mayEditProfile && !mayGrantBasicPermissions && !mayGrantCompanyPermission && !maySetGrantScope){
+      if(!mayEditProfile && !mayEditPersonalInfo && !mayGrantBasicPermissions && !mayGrantCompanyPermission && !maySetGrantScope){
         showToast('이 직원을 수정할 권한이 없어요.');
         return;
       }
@@ -3089,8 +3102,11 @@ function renderEmpList(){
       if(mayEditProfile){
         if(profileScopeDept && newDept !== profileScopeDept){ showToast('다른 부서로 변경할 수 없어요.'); return; }
         if(!newName){ showToast('이름을 입력해주세요.'); return; }
-        if(newDob && !/^\d{6}$/.test(newDob)){ showToast('생년월일은 6자리 숫자로 입력해주세요.'); return; }
         if(newName !== originalName && empNames().includes(newName)){ showToast('이미 등록된 이름이에요.'); return; }
+      }
+      if(mayEditPersonalInfo && newDob && !/^\d{6}$/.test(newDob)){
+        showToast('생년월일은 6자리 숫자로 입력해주세요.');
+        return;
       }
 
       const emp = employees.find(e=>e.name===originalName);
@@ -3102,6 +3118,8 @@ function renderEmpList(){
         emp.dept = newDept;
         emp.employmentType = newType;
         emp.position = newPosition;
+      }
+      if(mayEditPersonalInfo){
         emp.dob = newDob;
         emp.hireDate = newHireDate;
       }
@@ -3195,12 +3213,23 @@ function cycleStartFor(hireDateStr){
 
 function entryKind(r){ return r.kind || 'use'; } // 예전 데이터는 kind 없으면 '사용'으로 취급
 
+function leaveCycleKey(emp){
+  if(!emp || !emp.hireDate) return '';
+  return dateKey(cycleStartFor(leaveAnchorDate(emp)));
+}
+
 function usedForCurrentCycle(emp){
   if(!emp.hireDate) return 0;
   const start = cycleStartFor(leaveAnchorDate(emp));
+  const cycleKey = leaveCycleKey(emp);
   return leaveRequests
-    .filter(r=>r.name===emp.name && entryKind(r)==='use' && new Date(r.date+'T00:00:00') >= start)
-    .reduce((sum,r)=>sum+r.amount, 0);
+    .filter(r=>{
+      if(r.name!==emp.name) return false;
+      const kind = entryKind(r);
+      if(kind==='accumulated') return !r.cycleStart || r.cycleStart===cycleKey;
+      return kind==='use' && !!r.date && new Date(r.date+'T00:00:00') >= start;
+    })
+    .reduce((sum,r)=>sum+(Number(r.amount)||0), 0);
 }
 function adjustForCurrentCycle(emp){
   if(!emp.hireDate) return 0;
@@ -3280,7 +3309,7 @@ function renderLeave(){
       }
       const count = leaveRequests.filter(r=>r.name===name).length;
       if(count===0){ showToast('삭제할 연차 기록이 없어요.'); return; }
-      const ok = await askConfirm(name+' 님의 연차/월차 사용·조정 기록 '+count+'건을 전부 삭제할까요? (퇴사 처리 등에 사용, 되돌릴 수 없어요)');
+      const ok = await askConfirm(name+' 님의 연차/월차 사용·누적 사용·가감 기록 '+count+'건을 전부 삭제할까요? (퇴사 처리 등에 사용, 되돌릴 수 없어요)');
       if(!ok) return;
       leaveRequests = leaveRequests.filter(r=>r.name!==name);
       await saveLeaveRequests();
@@ -3327,15 +3356,25 @@ function closePhotoView(){
 
 function updateLeaveEntryUI(){
   const kind = document.getElementById('leaveEntryKind').value;
+  const isUse = kind === 'use';
+  const isAccumulated = kind === 'accumulated';
   const isAdjust = kind === 'adjust';
 
-  document.getElementById('leaveDateRangeRow').classList.toggle('hidden', isAdjust);
+  // 실제 사용만 날짜 범위를 받고, 누적 사용은 날짜 없이 수량만 입력합니다.
+  document.getElementById('leaveDateRangeRow').classList.toggle('hidden', !isUse);
   document.getElementById('leaveSingleDateRow').classList.toggle('hidden', !isAdjust);
   document.getElementById('leaveEntryAdjustAmount').classList.toggle('hidden', !isAdjust);
 
   if(isAdjust){
     document.getElementById('quickAmountRow').classList.add('hidden');
     document.getElementById('leaveEntryAmount').classList.add('hidden');
+    document.getElementById('leaveRangeAmountLabel').classList.add('hidden');
+    return;
+  }
+
+  if(isAccumulated){
+    document.getElementById('quickAmountRow').classList.remove('hidden');
+    document.getElementById('leaveEntryAmount').classList.remove('hidden');
     document.getElementById('leaveRangeAmountLabel').classList.add('hidden');
     return;
   }
@@ -3542,7 +3581,7 @@ function renderLeaveApprovals(){
 function openLeaveDetail(name){
   if(!canViewAdminWorkEmployee(name)){ showToast('현재 업무 권한 범위에 포함된 직원의 연차 내역만 볼 수 있어요.'); return; }
   leaveDetailTargetName = name;
-  document.getElementById('leaveDetailName').textContent = name+' 님 휴가 사용 내역';
+  document.getElementById('leaveDetailName').textContent = name+' 님 연월차 내역';
   const today = dateKey(new Date());
   document.getElementById('leaveEntryStartDate').value = today;
   document.getElementById('leaveEntryEndDate').value = today;
@@ -3567,23 +3606,38 @@ function renderLeaveDetailList(){
   const el = document.getElementById('leaveDetailList');
   const emp = employees.find(e=>e.name===leaveDetailTargetName);
   const start = emp && leaveAnchorDate(emp) ? cycleStartFor(leaveAnchorDate(emp)) : null;
+  const cycleKey = emp ? leaveCycleKey(emp) : '';
   const entries = leaveRequests
     .filter(r=>r.name===leaveDetailTargetName)
-    .sort((a,b)=>b.date.localeCompare(a.date));
+    .sort((a,b)=>String(b.date||b.ts||'').localeCompare(String(a.date||a.ts||'')));
   if(entries.length===0){
-    el.innerHTML = '<div style="color:var(--muted);font-size:13px;">사용 내역이 없어요.</div>';
+    el.innerHTML = '<div style="color:var(--muted);font-size:13px;">연월차 내역이 없어요.</div>';
     return;
   }
   el.innerHTML = entries.map(r=>{
-    const inCycle = start ? new Date(r.date+'T00:00:00') >= start : true;
     const kind = entryKind(r);
+    const inCycle = kind==='accumulated'
+      ? (!r.cycleStart || r.cycleStart===cycleKey)
+      : (start && r.date ? new Date(r.date+'T00:00:00') >= start : true);
     const badge = kind==='adjust'
-      ? `<span class="dept-pill" style="background:var(--out-clay-soft);color:var(--out-clay);">조정</span>`
-      : `<span class="dept-pill">사용</span>`;
+      ? `<span class="dept-pill" style="background:var(--out-clay-soft);color:var(--out-clay);">가감</span>`
+      : (kind==='accumulated'
+        ? `<span class="dept-pill" style="background:#f3e8ff;color:#6b21a8;">누적 사용</span>`
+        : `<span class="dept-pill">사용</span>`);
     const amountLabel = kind==='adjust' ? `${r.amount>0?'+':''}${r.amount}일` : `${r.amount}일`;
-    const dateLabel = (r.endDate && r.endDate !== r.date) ? `${r.date} ~ ${r.endDate}` : r.date;
-    const deleteEntryButton = canManageLeaveRecords(leaveDetailTargetName)
+    const dateLabel = kind==='accumulated'
+      ? '날짜 없음'
+      : ((r.endDate && r.endDate !== r.date) ? `${r.date} ~ ${r.endDate}` : r.date);
+    const canManageEntry = canManageLeaveRecords(leaveDetailTargetName);
+    const deleteEntryButton = canManageEntry
       ? `<button class="rm-leave-entry" data-id="${r.id}" type="button" style="border:none;background:transparent;color:var(--out-clay);font-size:12px;cursor:pointer;">삭제</button>`
+      : '';
+    const adjustKindChangeButtons = kind==='adjust' && canManageEntry
+      ? `<div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap;margin-top:7px;padding-top:7px;border-top:1px dashed var(--line);">
+          <span style="font-size:11px;color:var(--muted);margin-right:2px;">카테고리만 변경:</span>
+          <button class="change-adjust-kind" data-id="${r.id}" data-kind="accumulated" type="button" style="border:1px solid #c4b5fd;background:#f5f3ff;color:#6b21a8;border-radius:6px;padding:4px 7px;font-size:11px;font-weight:700;cursor:pointer;">누적 사용</button>
+          <button class="change-adjust-kind" data-id="${r.id}" data-kind="use" type="button" style="border:1px solid var(--line);background:var(--paper);color:var(--ink-soft);border-radius:6px;padding:4px 7px;font-size:11px;font-weight:700;cursor:pointer;">사용</button>
+        </div>`
       : '';
     return `<div style="border:1px solid var(--line);border-radius:8px;padding:8px 10px;${inCycle?'':'opacity:0.45;'}">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;">
@@ -3591,10 +3645,61 @@ function renderLeaveDetailList(){
         ${deleteEntryButton}
       </div>
       <div style="font-size:12px;color:var(--ink-soft);margin-top:4px;">${escapeHtml(r.reason||'(사유 없음)')}</div>
+      ${adjustKindChangeButtons}
       ${r.photo ? `<img src="${r.photo}" class="leave-photo-thumb" data-full="${r.photo}" style="width:56px;height:56px;object-fit:cover;border-radius:6px;margin-top:6px;cursor:pointer;border:1px solid var(--line);">` : ''}
       ${inCycle?'':'<div style="font-size:10px;color:var(--muted);margin-top:2px;">이전 주기 기록</div>'}
     </div>`;
   }).join('');
+  el.querySelectorAll('.change-adjust-kind').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      if(!canManageLeaveRecords(leaveDetailTargetName)){
+        showToast('같은 부서 연월차 승인 권한 또는 회사 전체 편집 권한이 있어야 카테고리를 변경할 수 있어요.');
+        renderLeaveDetailList();
+        return;
+      }
+      const entry = leaveRequests.find(r=>r.id===btn.dataset.id && r.name===leaveDetailTargetName);
+      const newKind = btn.dataset.kind;
+      if(!entry || entryKind(entry)!=='adjust' || !['use','accumulated'].includes(newKind)){
+        showToast('변경할 수 있는 가감 기록을 찾지 못했어요.');
+        renderLeaveDetailList();
+        return;
+      }
+      const normalizedAmount = Math.abs(Number(entry.amount));
+      if(!Number.isFinite(normalizedAmount) || normalizedAmount<=0){
+        showToast('0일인 가감 기록은 사용 기록으로 변경할 수 없어요.');
+        return;
+      }
+      if(newKind==='use' && !entry.date){
+        showToast('날짜가 없는 가감 기록은 사용으로 변경할 수 없어요. 누적 사용으로 변경해주세요.');
+        return;
+      }
+      const newLabel = newKind==='accumulated' ? '누적 사용' : '사용';
+      const dateNote = newKind==='accumulated'
+        ? '날짜는 제거되고 현재 연차 주기의 누적 사용량에 반영됩니다.'
+        : `${entry.date} 날짜를 그대로 사용합니다.`;
+      const ok = await askConfirm(`이 가감 기록을 ${newLabel}으로 변경할까요?\n${entry.amount}일 → ${normalizedAmount}일\n${dateNote}`);
+      if(!ok) return;
+
+      entry.kind = newKind;
+      entry.amount = normalizedAmount;
+      if(newKind==='accumulated'){
+        const targetEmp = employees.find(e=>e.name===leaveDetailTargetName);
+        entry.date = '';
+        entry.endDate = '';
+        entry.cycleStart = leaveCycleKey(targetEmp);
+      }else{
+        entry.endDate = entry.endDate || entry.date;
+        entry.cycleStart = '';
+      }
+      entry.categoryChangedAt = new Date().toISOString();
+      entry.categoryChangedBy = currentAdminName || activeAdminName() || '';
+      await saveLeaveRequests();
+      renderLeaveDetailList();
+      renderLeave();
+      showToast(`가감 기록을 ${newLabel}으로 변경했어요.`);
+    });
+  });
+
   el.querySelectorAll('.rm-leave-entry').forEach(btn=>{
     btn.addEventListener('click', async ()=>{
       if(!canManageLeaveRecords(leaveDetailTargetName)){
@@ -3861,7 +3966,7 @@ async function exportXlsxTemplate(){
     const byDate = {};
     empRows.forEach(r=>{ byDate[r.date]=r; });
 
-    // 이번 달 연차/반차/반반차 "사용" 내역을 날짜별로 펼쳐서 매핑
+    // 이번 달 날짜가 있는 "사용" 내역만 펼쳐서 매핑합니다. "누적 사용"은 엑셀에서 제외합니다.
     const leaveByDate = {};
     leaveRequests
       .filter(r=>r.name===emp.name && (r.kind||'use')==='use')
@@ -5376,11 +5481,14 @@ async function init(){
     const reason = document.getElementById('leaveEntryReason').value.trim();
     if(!reason){ showToast('사유를 입력해주세요.'); return; }
 
-    let date, endDate, amount;
+    let date = '', endDate = '', amount;
     if(kind === 'adjust'){
       date = document.getElementById('leaveEntryAdjustDate').value;
       endDate = date;
       amount = parseFloat(document.getElementById('leaveEntryAdjustAmount').value);
+    } else if(kind === 'accumulated'){
+      // 과거 사용분은 날짜 없이 현재 연차 주기에 누적합니다.
+      amount = parseFloat(document.getElementById('leaveEntryAmount').value);
     } else {
       date = document.getElementById('leaveEntryStartDate').value;
       endDate = document.getElementById('leaveEntryEndDate').value;
@@ -5389,12 +5497,14 @@ async function init(){
       if(diffDays < 1){ showToast('종료일이 시작일보다 빠를 수 없어요.'); return; }
       amount = diffDays === 1 ? parseFloat(document.getElementById('leaveEntryAmount').value) : diffDays;
     }
-    if(!date){ showToast('날짜를 선택해주세요.'); return; }
-    if(isNaN(amount) || amount===0){ showToast('일수를 입력해주세요.'); return; }
+    if(kind!=='accumulated' && !date){ showToast('날짜를 선택해주세요.'); return; }
+    if(isNaN(amount) || (kind==='adjust' ? amount===0 : amount<=0)){ showToast('일수를 입력해주세요.'); return; }
 
+    const targetEmp = employees.find(e=>e.name===leaveDetailTargetName);
+    const cycleStart = kind==='accumulated' ? leaveCycleKey(targetEmp) : '';
     leaveRequests.push({
       id: Date.now()+'-'+Math.random().toString(36).slice(2,7),
-      name: leaveDetailTargetName, date, endDate, amount, reason, kind,
+      name: leaveDetailTargetName, date, endDate, amount, reason, kind, cycleStart,
       photo: pendingLeavePhoto || null, ts: new Date().toISOString()
     });
     await saveLeaveRequests();
@@ -5411,7 +5521,7 @@ async function init(){
     updateLeaveEntryUI();
     renderLeaveDetailList();
     renderLeave();
-    showToast('사용 내역이 추가됐어요.');
+    showToast(kind==='accumulated' ? '누적 사용량이 추가됐어요.' : (kind==='adjust' ? '가감 내역이 추가됐어요.' : '사용 내역이 추가됐어요.'));
   });
 }
 
