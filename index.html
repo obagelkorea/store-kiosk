@@ -857,8 +857,6 @@
       <nav class="tabs">
         <button class="tab-btn active" data-tab="dashboard"><span class="tab-icon">▦</span><span>대시보드</span></button>
         <button class="tab-btn" data-tab="kiosk"><span class="tab-icon">⏱</span><span>키오스크</span></button>
-        <button class="tab-btn" data-tab="closing"><span class="tab-icon">☾</span><span>마감보고</span></button>
-        <button class="tab-btn" data-tab="docs"><span class="tab-icon">✉</span><span>전자문서</span><span id="docsTabBadge" class="hidden" style="background:var(--out-clay);color:#fff;border-radius:999px;padding:1px 6px;font-size:10px;margin-left:auto;">0</span></button>
         <button class="tab-btn" data-tab="admin"><span class="tab-icon">⚙</span><span>관리자</span><span id="adminTabBadge" class="hidden" style="background:var(--out-clay);color:#fff;border-radius:999px;padding:1px 6px;font-size:10px;margin-left:auto;">0</span></button>
       </nav>
     </aside>
@@ -930,7 +928,6 @@
               <h3>빠른 메뉴</h3>
               <div class="quick-nav">
                 <button type="button" data-go-tab="kiosk">⏱ 출퇴근 키오스크 열기</button>
-                <button type="button" data-go-tab="closing">☾ 마감보고 작성 화면</button>
                 <button type="button" data-go-tab="admin">⚙ 관리자 화면</button>
               </div>
             </div>
@@ -2657,7 +2654,6 @@ function renderDashboardStats(){
   const clockedIn = currentWorkingEmployees().length;
   const actor = dashboardActor();
   const pending = applicationsVisibleToActor(actor).filter(a=>a.status==='pending').length;
-  const closingCount = visibleClosingReports(actor).filter(r=>localDateKey(r.createdAt)===today).length;
   const canOpenLeave = actorCanApproveLeave(actor);
   const pendingNote = !actor ? '로그인 후 권한에 따라 확인' : canOpenLeave ? '눌러서 승인 화면 열기' : '연월차 승인 권한이 필요해요';
 
@@ -2669,7 +2665,6 @@ function renderDashboardStats(){
   overview.innerHTML = `
     <div class="dashboard-overview-item"><span>등록 직원</span><span>${employees.length}명</span></div>
     <button type="button" class="dashboard-overview-item" data-dashboard-action="working-now"><span>현재 근무 중</span><span>${clockedIn}명</span></button>
-    <button type="button" class="dashboard-overview-item" data-dashboard-action="closing"><span>${actor===OWNER_NAME?'오늘 전체 마감보고':'오늘 우리 팀 마감보고'}</span><span>${actor?closingCount+'건':'로그인'}</span></button>
     <button type="button" class="dashboard-overview-item" data-dashboard-action="pending-leave"><span>연차 승인 대기</span><span>${pending}건</span></button>`;
 }
 
