@@ -4341,7 +4341,15 @@ async function exportXlsxTemplate(){
   if(typeof ExcelJS === 'undefined'){ showToast('엑셀 라이브러리를 아직 불러오는 중이에요. 잠시 후 다시 눌러주세요.'); return; }
   const monthKey = document.getElementById('monthPicker').value;
   if(!monthKey){ showToast('월을 선택해주세요.'); return; }
-  const exportEmployees = visibleEmployeesForAdmin();
+  const EXPORT_DEPT_ORDER = ['마케팅','베이커리','BOH','FOH'];
+  const EXPORT_POSITION_ORDER = { '매니저':0, '수퍼바이저':1 };
+  const exportEmployees = visibleEmployeesForAdmin().slice().sort((a,b)=>{
+    const da = EXPORT_DEPT_ORDER.indexOf(a.dept), db = EXPORT_DEPT_ORDER.indexOf(b.dept);
+    const deptDiff = (da===-1?EXPORT_DEPT_ORDER.length:da) - (db===-1?EXPORT_DEPT_ORDER.length:db);
+    if(deptDiff!==0) return deptDiff;
+    const pa = EXPORT_POSITION_ORDER[a.position] ?? 2, pb = EXPORT_POSITION_ORDER[b.position] ?? 2;
+    return pa - pb;
+  });
   if(exportEmployees.length===0){ showToast('내보낼 직원이 없어요.'); return; }
 
   const [yearStr, monStr] = monthKey.split('-');
