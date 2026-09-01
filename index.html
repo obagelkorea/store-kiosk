@@ -4483,6 +4483,10 @@ async function exportXlsxTemplate(){
 }
 
 function switchTab(tab){
+  // 대표님이 관리자 화면에 들어온 뒤 대시보드·키오스크로 돌아가면 보안을 위해 자동 로그아웃합니다.
+  if((tab==='dashboard' || tab==='kiosk') && adminUnlocked && currentAdminName===OWNER_NAME){
+    logoutDashboardActor();
+  }
   document.querySelectorAll('.tab-btn').forEach(b=>b.classList.toggle('active', b.dataset.tab===tab));
   ['dashboard','kiosk','closing','docs','admin'].forEach(name=>{
     const view = document.getElementById(name+'View');
