@@ -225,7 +225,7 @@
   }
   .emp-list{
     list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;
-    max-height:380px;overflow-y:auto;padding-right:2px;
+    max-height:max(320px, calc(100vh - 340px));overflow-y:auto;padding-right:2px;
   }
   .search-box{
     position:relative;margin:12px 0 10px;padding-top:12px;border-top:1px dashed var(--line);
@@ -1192,6 +1192,8 @@
         <div class="panel-header" style="margin-bottom:10px;">
           <h3 style="margin:0;">연차 · 월차 관리</h3>
           <div class="controls">
+            <input type="month" id="leaveReportMonthPicker" title="연차 현황 보고서 대상 월" aria-label="연차 현황 보고서 대상 월" />
+            <button id="exportLeaveReportBtn" type="button">연차 현황 보고서 다운로드(.xlsx)</button>
             <select id="leaveDeptFilter"><option value="">전체 부서</option></select>
           </div>
         </div>
@@ -3580,11 +3582,11 @@ function leaveAnchorDate(emp){
   return emp.hireDate || '';
 }
 
-function calcLeave(emp){
+function calcLeave(emp, asOf){
   const anchorStr = leaveAnchorDate(emp);
   if(!anchorStr) return null;
   const hire = new Date(anchorStr+'T00:00:00');
-  const now = new Date();
+  const now = asOf || new Date();
   if(isNaN(hire.getTime()) || hire > now) return null;
   let months = (now.getFullYear()-hire.getFullYear())*12 + (now.getMonth()-hire.getMonth());
   if(now.getDate() < hire.getDate()) months--;
@@ -3618,6 +3620,51 @@ function leaveAdjustTotal(emp){
   return leaveRequests
     .filter(r=>r.name===emp.name && entryKind(r)==='adjust')
     .reduce((sum,r)=>sum+(Number(r.amount)||0), 0);
+}
+
+// 월별 연차 현황 보고서용: 특정 시점(asOfDate) 기준 누적 사용·가감·잔여 계산
+// 날짜 없는 "누적 사용"·"가감"은 특정 시점에 매이지 않으므로 항상 포함합니다.
+function usedLeaveTotalAsOf(emp, asOfDate){
+  return leaveRequests
+    .filter(r=>r.name===emp.name && ['use','accumulated'].includes(entryKind(r)))
+    .filter(r=> !r.date || new Date(r.date+'T00:00:00') <= asOfDate)
+    .reduce((sum,r)=>sum+(Number(r.amount)||0), 0);
+}
+
+function leaveAdjustTotalAsOf(emp, asOfDate){
+  return leaveRequests
+    .filter(r=>r.name===emp.name && entryKind(r)==='adjust')
+    .filter(r=> !r.date || new Date(r.date+'T00:00:00') <= asOfDate)
+    .reduce((sum,r)=>sum+(Number(r.amount)||0), 0);
+}
+
+function remainLeaveAsOf(emp, asOfDate){
+  const info = calcLeave(emp, asOfDate);
+  const accrued = Math.max((info ? info.accrued : 0) + leaveAdjustTotalAsOf(emp, asOfDate), 0);
+  return Math.max(accrued - usedLeaveTotalAsOf(emp, asOfDate), 0);
+}
+
+// 특정 달에 실제 사용한 월차 일수 (날짜가 있는 "사용" 항목만, 여러 날짜 신청은 하루=1로 계산)
+function monthlyLeaveUsage(emp, monthKey){
+  let total = 0;
+  leaveRequests
+    .filter(r=>r.name===emp.name && entryKind(r)==='use')
+    .forEach(r=>{
+      const start = r.date;
+      const end = r.endDate || r.date;
+      if(!start) return;
+      if(start === end){
+        if(monthKeyOf(start)===monthKey) total += Number(r.amount)||0;
+      }else{
+        let cur = new Date(start+'T00:00:00');
+        const endD = new Date(end+'T00:00:00');
+        while(cur <= endD){
+          if(monthKeyOf(dateKey(cur))===monthKey) total += 1;
+          cur.setDate(cur.getDate()+1);
+        }
+      }
+    });
+  return total;
 }
 
 function renderLeave(){
@@ -4479,6 +4526,240 @@ async function exportXlsxTemplate(){
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
   showToast('다운로드됐어요.');
+}
+
+function round3(n){ return Math.round((n+Number.EPSILON)*1000)/1000; }
+
+async function exportLeaveStatusReport(){
+  if(typeof ExcelJS === 'undefined'){ showToast('엑셀 라이브러리를 아직 불러오는 중이에요. 잠시 후 다시 눌러주세요.'); return; }
+  const monthKey = document.getElementById('leaveReportMonthPicker').value;
+  if(!monthKey){ showToast('보고서 대상 월을 선택해주세요.'); return; }
+  const [yearStr, monStr] = monthKey.split('-');
+  const year = parseInt(yearStr,10), month = parseInt(monStr,10);
+  const monthEnd = new Date(year, month, 0, 23,59,59);
+  const prevMonthEnd = new Date(year, month-1, 0, 23,59,59);
+
+  const deptFilterVal = document.getElementById('leaveDeptFilter').value;
+  let exportEmployees = visibleEmployeesForAdmin();
+  if(deptFilterVal) exportEmployees = exportEmployees.filter(e=>e.dept===deptFilterVal);
+  exportEmployees = sortByDeptName(exportEmployees);
+  if(exportEmployees.length===0){ showToast('내보낼 직원이 없어요.'); return; }
+
+  const C = { darkRed:'FF8B1A1A', red:'FFC0392B', deepRed:'FF922B21', pink:'FFFADBD8', pinkSoft:'FFFEF5F5', peach:'FFFDEBD0', yellow:'FFFEF9E7', blue:'FF1A5276', redText:'FFE74C3C', white:'FFFFFFFF' };
+  const fill = argb => ({type:'pattern', pattern:'solid', fgColor:{argb}});
+  const thin = {style:'thin'}, medium = {style:'medium'};
+
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('연차 현황 보고서', { pageSetup:{orientation:'landscape', fitToPage:true, fitToWidth:1, fitToHeight:0} });
+  ws.columns = [{width:4},{width:12},{width:10},{width:9},{width:9},{width:9},{width:9},{width:8},{width:10},{width:9},{width:11},{width:30}];
+
+  ws.mergeCells('A1:L1');
+  ws.getCell('A1').value = '연차 현황 보고서';
+  ws.getCell('A1').font = {bold:true, size:18, color:{argb:C.white}};
+  ws.getCell('A1').fill = fill(C.darkRed);
+  ws.getCell('A1').alignment = {horizontal:'center', vertical:'center'};
+  ws.getRow(1).height = 37.5;
+
+  ws.mergeCells('A2:C2');
+  ws.getCell('A2').value = '부서명 (오베이글하우스 합정점)';
+  ws.getCell('A2').font = {bold:true, size:10, color:{argb:C.white}};
+  ws.getCell('A2').fill = fill(C.red);
+  ws.getCell('A2').alignment = {horizontal:'left', vertical:'center'};
+
+  ws.mergeCells('D2:G2');
+  ws.getCell('D2').value = '작성 연월';
+  ws.getCell('D2').font = {bold:true, size:9, color:{argb:C.white}};
+  ws.getCell('D2').fill = fill(C.red);
+  ws.getCell('D2').alignment = {horizontal:'right', vertical:'center'};
+
+  ws.mergeCells('H2:I2');
+  ws.getCell('H2').value = `${year}년`;
+  ws.getCell('H2').font = {bold:true, size:11, color:{argb:C.blue}};
+  ws.getCell('H2').fill = fill(C.yellow);
+  ws.getCell('H2').alignment = {horizontal:'center', vertical:'center'};
+
+  ws.mergeCells('J2:K2');
+  ws.getCell('J2').value = `${month}월`;
+  ws.getCell('J2').font = {bold:true, size:11, color:{argb:C.blue}};
+  ws.getCell('J2').fill = fill(C.yellow);
+  ws.getCell('J2').alignment = {horizontal:'center', vertical:'center'};
+
+  ws.getCell('L2').value = '작성자:                         서명:';
+  ws.getCell('L2').font = {size:9, color:{argb:C.white}};
+  ws.getCell('L2').fill = fill(C.red);
+  ws.getCell('L2').alignment = {horizontal:'center', vertical:'center'};
+  ws.getRow(2).height = 19.5;
+
+  ws.mergeCells('A3:L3');
+  ws.getCell('A3').value = '전달 이월 월차 · 당월 지급 월차 · 당월 사용 월차는 앱에서 자동으로 채워졌어요. 결근 일수만 입력하면 만근 충족 여부가 자동으로 바뀝니다.  |  노란색 셀만 직접 입력·수정하세요.';
+  ws.getCell('A3').font = {size:8, color:{argb:C.red}};
+  ws.getCell('A3').fill = fill(C.pink);
+  ws.getCell('A3').alignment = {horizontal:'left', vertical:'center'};
+  ws.getRow(3).height = 15;
+
+  ws.mergeCells('A4:C4'); ws.getCell('A4').value = '기본 정보';
+  ws.mergeCells('D4:G4'); ws.getCell('D4').value = '월차 현황';
+  ws.mergeCells('H4:I4'); ws.getCell('H4').value = '근태 현황';
+  ws.mergeCells('J4:K4'); ws.getCell('J4').value = '월차 사용';
+  ws.getCell('L4').value = '사유 / 비고';
+  [['A4',C.deepRed],['D4',C.red],['H4',C.deepRed],['J4',C.red],['L4',C.deepRed]].forEach(([addr,color])=>{
+    const c = ws.getCell(addr);
+    c.font = {bold:true, size:9, color:{argb:C.white}};
+    c.fill = fill(color);
+    c.alignment = {horizontal:'center', vertical:'center'};
+  });
+  ws.getRow(4).height = 18;
+
+  const headers = ['#','직원명','부서','전달\n이월 월차','당월\n지급 월차','당월\n지급여부','월차\n총계','당월\n결근 일수','만근\n충족 여부','당월\n사용 월차','잔여\n월차','월차 발생·미발생 사유  /  특이사항'];
+  headers.forEach((h,i)=>{
+    const c = ws.getRow(5).getCell(i+1);
+    c.value = h;
+    c.font = {bold:true, size:9, color:{argb:C.white}};
+    c.fill = fill(C.darkRed);
+    c.alignment = {horizontal:'center', vertical:'center', wrapText:true};
+  });
+  ws.getRow(5).height = 33.75;
+  ws.views = [{showGridLines:false, state:'frozen', ySplit:5}];
+
+  // 데이터별 셀 스타일(테두리 포함) — 업로드된 실제 운영 양식과 동일하게 맞춥니다.
+  const colStyle = {
+    A:{fill:C.pinkSoft, color:'FF7F8C8D', border:[thin,thin,thin,thin]},
+    B:{fill:C.yellow, color:C.blue, border:[medium,thin,thin,thin]},
+    C:{fill:C.yellow, color:C.blue, border:[thin,medium,thin,thin]},
+    D:{fill:C.yellow, color:C.blue, border:[medium,thin,thin,thin], numFmt:'0.000'},
+    E:{fill:C.yellow, color:C.blue, border:[thin,thin,thin,thin], numFmt:'0.000'},
+    F:{fill:C.yellow, color:C.blue, border:[thin,thin,thin,thin]},
+    G:{fill:C.pink, color:C.darkRed, bold:true, border:[thin,thin,thin,thin], numFmt:'0.000'},
+    H:{fill:C.yellow, color:C.blue, border:[medium,thin,thin,thin], numFmt:'0'},
+    I:{fill:C.yellow, color:C.blue, border:[thin,medium,thin,thin]},
+    J:{fill:C.yellow, color:C.blue, border:[medium,thin,thin,thin], numFmt:'0.000'},
+    K:{fill:C.pink, color:C.redText, bold:true, border:[thin,medium,thin,thin], numFmt:'0.000'},
+    L:{fill:C.pinkSoft, color:'FF000000', border:[medium,medium,thin,thin]}
+  };
+  function applyRowStyle(row){
+    'ABCDEFGHIJKL'.split('').forEach((col,i)=>{
+      const s = colStyle[col];
+      const c = row.getCell(i+1);
+      c.fill = fill(s.fill);
+      c.font = {size:10, bold:!!s.bold, color:{argb:s.color}};
+      c.alignment = {horizontal:'center', vertical:'center'};
+      c.border = {left:s.border[0], right:s.border[1], top:s.border[2], bottom:s.border[3]};
+      if(s.numFmt) c.numFmt = s.numFmt;
+    });
+  }
+
+  const startRow = 6;
+  let rowIdx = startRow;
+  exportEmployees.forEach((emp, idx)=>{
+    const row = ws.getRow(rowIdx);
+    const carry = round3(remainLeaveAsOf(emp, prevMonthEnd));
+    const curInfo = calcLeave(emp, monthEnd);
+    const prevInfo = calcLeave(emp, prevMonthEnd);
+    const accrualDelta = (curInfo?curInfo.accrued:0) - (prevInfo?prevInfo.accrued:0);
+    const adjustDelta = leaveAdjustTotalAsOf(emp, monthEnd) - leaveAdjustTotalAsOf(emp, prevMonthEnd);
+    const grantedThisMonth = round3(accrualDelta + adjustDelta);
+    const usedThisMonth = round3(monthlyLeaveUsage(emp, monthKey));
+
+    row.getCell(1).value = idx+1;
+    row.getCell(2).value = emp.name;
+    row.getCell(3).value = emp.dept;
+    row.getCell(4).value = carry;
+    row.getCell(5).value = grantedThisMonth;
+    row.getCell(6).value = grantedThisMonth > 0 ? '발생' : '미발생';
+    row.getCell(7).value = { formula: `IFERROR(IF(AND(D${rowIdx}="",E${rowIdx}=""),"",IF(D${rowIdx}="",0,D${rowIdx})+IF(E${rowIdx}="",0,E${rowIdx})),"—")` };
+    // H(당월 결근 일수)는 매니저가 직접 입력하도록 비워둡니다.
+    row.getCell(9).value = { formula: `IF(H${rowIdx}="","충족",IF(H${rowIdx}>0,"미충족","충족"))` };
+    row.getCell(10).value = usedThisMonth;
+    row.getCell(11).value = { formula: `IFERROR(IF(G${rowIdx}="—","—",IF(G${rowIdx}="","",IF(J${rowIdx}="",G${rowIdx},G${rowIdx}-J${rowIdx}))),"—")` };
+    applyRowStyle(row);
+    row.height = 21.75;
+    rowIdx++;
+  });
+  const endRow = rowIdx-1;
+
+  const totalRow = ws.getRow(rowIdx);
+  totalRow.getCell(1).value = '합  계';
+  totalRow.getCell(4).value = { formula: `SUMIF(D${startRow}:D${endRow},">0")` };
+  totalRow.getCell(5).value = { formula: `SUMIF(E${startRow}:E${endRow},">0")` };
+  totalRow.getCell(6).value = { formula: `COUNTIF(F${startRow}:F${endRow},"발생")&"건 발생 / "&COUNTIF(F${startRow}:F${endRow},"미발생")&"건 미발생"` };
+  totalRow.getCell(7).value = { formula: `IFERROR(SUMPRODUCT((ISNUMBER(G${startRow}:G${endRow}))*G${startRow}:G${endRow}),0)` };
+  totalRow.getCell(8).value = { formula: `SUMIF(H${startRow}:H${endRow},">0")` };
+  totalRow.getCell(9).value = { formula: `COUNTIF(I${startRow}:I${endRow},"충족")&"명 충족 / "&COUNTIF(I${startRow}:I${endRow},"미충족")&"명 미충족"` };
+  totalRow.getCell(10).value = { formula: `SUMIF(J${startRow}:J${endRow},">0")` };
+  totalRow.getCell(11).value = { formula: `IFERROR(SUMPRODUCT((ISNUMBER(K${startRow}:K${endRow}))*K${startRow}:K${endRow}),0)` };
+  totalRow.getCell(12).value = '※ 발생·미발생·충족·미충족 셀은 해당 단어 그대로 입력하면 자동 집계됩니다';
+  totalRow.eachCell(c=>{ c.font={bold:true, size:9, color:{argb:C.white}}; c.fill=fill(C.red); c.alignment={horizontal:'center', vertical:'center'}; c.border={left:thin,right:thin,top:thin,bottom:thin}; });
+  totalRow.getCell(12).font = {size:9, color:{argb:C.white}};
+  totalRow.getCell(12).alignment = {horizontal:'left', vertical:'center'};
+  totalRow.height = 21.75;
+
+  const statsRow = rowIdx+2;
+  ws.getCell(`A${statsRow}`).value = '이달 통계';
+  ws.mergeCells(`A${statsRow}:B${statsRow}`);
+  const statPairs = [
+    ['C','총 재직 인원', `COUNTA(B${startRow}:B${endRow})&"명"`, C.pink],
+    ['E','월차 발생', `COUNTIF(F${startRow}:F${endRow},"발생")&"명"`, C.pinkSoft],
+    ['G','월차 미발생', `COUNTIF(F${startRow}:F${endRow},"미발생")&"명"`, C.peach],
+    ['I','소정근로 미충족', `COUNTIF(I${startRow}:I${endRow},"미충족")&"명"`, C.pink],
+    ['K','결근 발생 인원', `COUNTIF(H${startRow}:H${endRow},">"&0)&"명"`, C.pinkSoft]
+  ];
+  ws.getCell(`A${statsRow}`).font = {bold:true, size:9, color:{argb:C.white}};
+  ws.getCell(`A${statsRow}`).fill = fill(C.deepRed);
+  ws.getCell(`A${statsRow}`).alignment = {horizontal:'center', vertical:'center'};
+  statPairs.forEach(([labelCol,label,formula,bg])=>{
+    const labelCell = ws.getCell(`${labelCol}${statsRow}`);
+    labelCell.value = label;
+    labelCell.font = {bold:true, size:9, color:{argb:C.darkRed}};
+    labelCell.fill = fill(bg);
+    labelCell.alignment = {horizontal:'right', vertical:'center'};
+    const valueCol = String.fromCharCode(labelCol.charCodeAt(0)+1);
+    const valueCell = ws.getCell(`${valueCol}${statsRow}`);
+    valueCell.value = { formula };
+    valueCell.font = {bold:true, size:9, color:{argb:C.darkRed}};
+    valueCell.fill = fill(bg);
+    valueCell.alignment = {horizontal:'center', vertical:'center'};
+  });
+  ws.getRow(statsRow).height = 19.5;
+
+  const noteRow = statsRow+1;
+  ws.mergeCells(`A${noteRow}:L${noteRow}`);
+  ws.getCell(`A${noteRow}`).value = "  ※ 당월 지급여부·만근 충족 여부는 필요 시 직접 수정할 수 있어요  |  월차 총계 = 전달 이월 + 당월 지급  |  잔여 월차 = 총계 − 당월 사용";
+  ws.getCell(`A${noteRow}`).font = {size:11, color:{argb:'FF7F8C8D'}};
+  ws.getRow(noteRow).height = 15.75;
+
+  const guide = wb.addWorksheet('작성 안내');
+  guide.columns = [{width:22},{width:70}];
+  const guideLines = [
+    ['월차 현황 보고서 — 작성 안내', ''],
+    ['항목별 자동 입력', ''],
+    ['전달 이월 월차 / 당월 지급 월차 / 당월 사용 월차', '앱의 연차 · 월차 관리 데이터로 자동 계산돼 채워집니다. 수정이 필요하면 직접 고쳐도 돼요.'],
+    ['당월 지급여부', "당월 지급 월차가 0보다 크면 '발생', 아니면 '미발생'으로 기본 설정됩니다. 결근 등으로 발생분을 취소해야 하면 '미발생'으로 바꿔주세요."],
+    ['매니저가 직접 입력할 항목', ''],
+    ['당월 결근 일수', '당월 결근한 날의 수를 숫자로 입력합니다 (0이면 공란). 입력하면 만근 충족 여부가 자동으로 바뀝니다.'],
+    ['사유 / 비고', "월차 미발생 사유, 특이사항(중도입사·퇴사·장기병가 등)을 기재합니다."],
+    ['월차 발생 기준', ''],
+    ['정규직', '첫 해엔 만근 기준 월 1일씩 최대 11일 누적, 만 1년부터는 입사 기념일마다 연차 발생분(기본 15일, 3년차부터 2년마다 1일 가산, 1회 최대 25일)이 추가됩니다.'],
+    ['계약직 · 파트타이머(주 15시간 이상)', '입사일 기준 매달 1일씩 상한 없이 계속 누적됩니다.']
+  ];
+  guideLines.forEach((line,i)=>{
+    const r = i+1;
+    guide.getCell(`A${r}`).value = line[0];
+    guide.getCell(`B${r}`).value = line[1];
+    if(!line[1]){ guide.getCell(`A${r}`).font = {bold:true, size:12}; }
+    guide.getCell(`B${r}`).alignment = {wrapText:true, vertical:'top'};
+  });
+
+  const buffer = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buffer], {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `연차현황보고서_${monthKey}.xlsx`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  showToast('연차 현황 보고서를 다운로드했어요.');
 }
 
 function switchTab(tab){
@@ -5507,6 +5788,7 @@ async function init(){
 
   const now = new Date();
   document.getElementById('monthPicker').value = now.getFullYear()+'-'+pad(now.getMonth()+1);
+  document.getElementById('leaveReportMonthPicker').value = now.getFullYear()+'-'+pad(now.getMonth()+1);
   document.getElementById('rangeStartPicker').value = '';
   document.getElementById('rangeEndPicker').value = '';
   renderPeriodPicker();
@@ -5777,6 +6059,7 @@ async function init(){
   document.getElementById('leaveApprovalDeptFilter')?.addEventListener('change', renderLeaveApprovals);
   document.getElementById('exportCsvBtn').addEventListener('click', exportCsv);
   document.getElementById('exportXlsxBtn').addEventListener('click', exportXlsxTemplate);
+  document.getElementById('exportLeaveReportBtn').addEventListener('click', exportLeaveStatusReport);
 
   document.getElementById('logEditClose').addEventListener('click', closeLogEdit);
   document.getElementById('logEditOverlay').addEventListener('click', (e)=>{
