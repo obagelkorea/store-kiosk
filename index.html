@@ -4383,24 +4383,25 @@ async function exportXlsxTemplate(){
 
     // 이번 달 날짜가 있는 "사용" 내역만 펼쳐서 매핑합니다. "누적 사용"은 엑셀에서 제외합니다.
     const leaveByDate = {};
+    const leaveCounts = { full:0, half:0, quarter:0 };
     leaveRequests
       .filter(r=>r.name===emp.name && (r.kind||'use')==='use')
       .forEach(r=>{
         const start = r.date;
         const end = r.endDate || r.date;
         if(start === end){
-          let label, hours;
-          if(r.amount === 0.5){ label='반차 사용'; hours=4; }
-          else if(r.amount === 0.25){ label='반반차 사용'; hours=6; }
-          else { label='연차 사용'; hours=8; }
-          if(monthKeyOf(start)===monthKey) leaveByDate[start] = {label, hours};
+          let label, hours, kind;
+          if(r.amount === 0.5){ label='반차 사용'; hours=4; kind='half'; }
+          else if(r.amount === 0.25){ label='반반차 사용'; hours=6; kind='quarter'; }
+          else { label='연차 사용'; hours=8; kind='full'; }
+          if(monthKeyOf(start)===monthKey){ leaveByDate[start] = {label, hours}; leaveCounts[kind]++; }
         } else {
           // 여러 날짜에 걸친 사용은 하루하루 전부 종일 연차로 처리
           let cur = new Date(start+'T00:00:00');
           const endD = new Date(end+'T00:00:00');
           while(cur <= endD){
             const dk = dateKey(cur);
-            if(monthKeyOf(dk)===monthKey) leaveByDate[dk] = {label:'연차 사용', hours:8};
+            if(monthKeyOf(dk)===monthKey){ leaveByDate[dk] = {label:'연차 사용', hours:8}; leaveCounts.full++; }
             cur.setDate(cur.getDate()+1);
           }
         }
@@ -4419,10 +4420,10 @@ async function exportXlsxTemplate(){
       const noteText = [dayRow && dayRow.note, leaveInfo && leaveInfo.label].filter(Boolean).join(' / ');
       const isFullDayLeave = !!(leaveInfo && leaveInfo.hours >= 8);
 
-      // 종일 연차는 기존처럼 8시간으로 처리합니다.
+      // 종일 연차는 실제 근무가 아니므로 총 근무시간에는 0으로 처리하고, 비고에만 표시합니다.
       // 반차·반반차는 실제 출근·퇴근 기록을 아래에서 그대로 표시합니다.
       if(isFullDayLeave){
-        row.getCell(5).value = leaveInfo.hours / 24;
+        row.getCell(5).value = 0;
         row.getCell(5).numFmt = 'h:mm';
         row.getCell(6).value = noteText;
         rowIdx++;
@@ -4457,6 +4458,11 @@ async function exportXlsxTemplate(){
     totalRow.getCell(1).value = '총 근무시간';
     totalRow.getCell(5).value = { formula: `SUM(E${startRow}:E${endRow})` };
     totalRow.getCell(5).numFmt = '[h]:mm';
+    const leaveSummaryParts = [];
+    if(leaveCounts.full>0) leaveSummaryParts.push(`연차${leaveCounts.full}`);
+    if(leaveCounts.half>0) leaveSummaryParts.push(`반차${leaveCounts.half}`);
+    if(leaveCounts.quarter>0) leaveSummaryParts.push(`반반차${leaveCounts.quarter}`);
+    if(leaveSummaryParts.length) totalRow.getCell(6).value = leaveSummaryParts.join('/');
     totalRow.eachCell(c=>{ c.font={bold:true}; c.fill=HEADER_FILL; });
   });
 
