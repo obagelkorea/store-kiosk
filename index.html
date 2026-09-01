@@ -225,7 +225,7 @@
   }
   .emp-list{
     list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;
-    max-height:max(320px, calc(100vh - 340px));overflow-y:auto;padding-right:2px;
+    max-height:480px;overflow-y:auto;padding-right:2px;
   }
   .search-box{
     position:relative;margin:12px 0 10px;padding-top:12px;border-top:1px dashed var(--line);
@@ -1175,6 +1175,11 @@
         <div class="panel-header" style="margin-bottom:10px;">
           <h3 style="margin:0;">연차 신청 승인 <span id="pendingCountTag" class="hidden" style="background:var(--out-clay);color:#fff;border-radius:999px;padding:2px 9px;font-size:11px;margin-left:6px;">0</span></h3>
           <div class="controls">
+            <button id="leaveApprovalApproveAllBtn" type="button" class="hidden" style="background:var(--in-green);color:#fff;border:none;padding:8px 12px;border-radius:8px;font-weight:700;font-size:12px;cursor:pointer;">전체 승인</button>
+            <select id="leaveApprovalStatusFilter">
+              <option value="pending">대기중만 보기</option>
+              <option value="all">전체 이력 보기</option>
+            </select>
             <select id="leaveApprovalDeptFilter"><option value="">전체 부서</option></select>
           </div>
         </div>
@@ -1839,6 +1844,21 @@ function sortByDeptName(list){
   return list.slice().sort((a,b)=>{
     const da = DEPTS.indexOf(a.dept), db = DEPTS.indexOf(b.dept);
     if(da !== db) return da - db;
+    return a.name.localeCompare(b.name, 'ko');
+  });
+}
+
+// 연월차 관리: 부서별로 묶고, 부서 안에서는 매니저 → 수퍼바이저 → 사원 순으로 나열
+function positionRank(e){
+  const rank = { '매니저':0, '수퍼바이저':1, '사원':2 };
+  return rank[e.position||'사원'] ?? 2;
+}
+function sortByDeptAndPosition(list){
+  return list.slice().sort((a,b)=>{
+    const da = DEPTS.indexOf(a.dept), db = DEPTS.indexOf(b.dept);
+    if(da !== db) return da - db;
+    const pa = positionRank(a), pb = positionRank(b);
+    if(pa !== pb) return pa - pb;
     return a.name.localeCompare(b.name, 'ko');
   });
 }
@@ -3691,7 +3711,7 @@ function renderLeave(){
 
   let filtered = visibleEmployeesForAdmin();
   if(deptFilter.value) filtered = filtered.filter(e=>e.dept===deptFilter.value);
-  filtered = sortByDeptName(filtered);
+  filtered = sortByDeptAndPosition(filtered);
 
   if(filtered.length===0){
     tbody.innerHTML = `<tr><td colspan="9" style="color:var(--muted);">표시할 직원이 없어요.</td></tr>`;
@@ -3946,11 +3966,43 @@ function renderLeaveApprovals(){
   if(deptFilter && deptFilter.value){
     visibleApplications = visibleApplications.filter(a=>deptOf(a.name)===deptFilter.value);
   }
-  if(visibleApplications.length===0){
-    tbody.innerHTML = `<tr><td colspan="7" style="color:var(--muted);">표시할 신청 내역이 없어요.</td></tr>`;
+
+  const statusFilter = document.getElementById('leaveApprovalStatusFilter');
+  const showAll = statusFilter && statusFilter.value === 'all';
+  const displayApplications = showAll ? visibleApplications : visibleApplications.filter(a=>a.status==='pending');
+
+  const decidablePending = displayApplications.filter(a=>a.status==='pending' && canDecideLeaveApplication(a));
+  const approveAllBtn = document.getElementById('leaveApprovalApproveAllBtn');
+  if(approveAllBtn){
+    approveAllBtn.classList.toggle('hidden', decidablePending.length < 2);
+    approveAllBtn.textContent = `전체 승인 (${decidablePending.length}건)`;
+    approveAllBtn.onclick = async ()=>{
+      const ok = await askConfirm(`대기중인 신청 ${decidablePending.length}건을 모두 승인할까요?`);
+      if(!ok) return;
+      decidablePending.forEach(app=>{
+        leaveRequests.push({
+          id: Date.now()+'-'+Math.random().toString(36).slice(2,7),
+          name: app.name, date: app.startDate, endDate: app.endDate, amount: app.amount,
+          reason: app.reason, kind:'use', ts: new Date().toISOString()
+        });
+        app.status = 'approved';
+        app.decidedBy = currentAdminName || '';
+        app.decidedAt = new Date().toISOString();
+      });
+      await saveLeaveRequests();
+      await saveLeaveApplications();
+      renderLeaveApprovals();
+      renderLeave();
+      renderDashboardStats();
+      showToast(`${decidablePending.length}건 승인 처리됐어요.`);
+    };
+  }
+
+  if(displayApplications.length===0){
+    tbody.innerHTML = `<tr><td colspan="7" style="color:var(--muted);">${showAll ? '표시할 신청 내역이 없어요.' : '대기중인 신청이 없어요.'}</td></tr>`;
     return;
   }
-  const sorted = visibleApplications.slice().sort((a,b)=>{
+  const sorted = displayApplications.slice().sort((a,b)=>{
     if(a.status==='pending' && b.status!=='pending') return -1;
     if(a.status!=='pending' && b.status==='pending') return 1;
     return b.requestedAt.localeCompare(a.requestedAt);
@@ -4540,10 +4592,10 @@ async function exportLeaveStatusReport(){
   const prevMonthEnd = new Date(year, month-1, 0, 23,59,59);
 
   const deptFilterVal = document.getElementById('leaveDeptFilter').value;
-  let exportEmployees = visibleEmployeesForAdmin();
+  let exportEmployees = visibleEmployeesForAdmin().filter(e=>(e.employmentType||'정규직')!=='파트타이머');
   if(deptFilterVal) exportEmployees = exportEmployees.filter(e=>e.dept===deptFilterVal);
-  exportEmployees = sortByDeptName(exportEmployees);
-  if(exportEmployees.length===0){ showToast('내보낼 직원이 없어요.'); return; }
+  exportEmployees = sortByDeptAndPosition(exportEmployees);
+  if(exportEmployees.length===0){ showToast('내보낼 직원이 없어요. (파트타이머는 연차 현황 보고서에서 제외돼요)'); return; }
 
   const C = { darkRed:'FF8B1A1A', red:'FFC0392B', deepRed:'FF922B21', pink:'FFFADBD8', pinkSoft:'FFFEF5F5', peach:'FFFDEBD0', yellow:'FFFEF9E7', blue:'FF1A5276', redText:'FFE74C3C', white:'FFFFFFFF' };
   const fill = argb => ({type:'pattern', pattern:'solid', fgColor:{argb}});
@@ -6057,6 +6109,7 @@ async function init(){
   document.getElementById('deptFilter').addEventListener('change', ()=>{ renderAdmin(); });
   document.getElementById('leaveDeptFilter').addEventListener('change', renderLeave);
   document.getElementById('leaveApprovalDeptFilter')?.addEventListener('change', renderLeaveApprovals);
+  document.getElementById('leaveApprovalStatusFilter')?.addEventListener('change', renderLeaveApprovals);
   document.getElementById('exportCsvBtn').addEventListener('click', exportCsv);
   document.getElementById('exportXlsxBtn').addEventListener('click', exportXlsxTemplate);
   document.getElementById('exportLeaveReportBtn').addEventListener('click', exportLeaveStatusReport);
